@@ -5,20 +5,40 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/git"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdRemote = &Command{
 	Run:          remote,
 	GitExtension: true,
-	Usage:        "remote [-p] OPTIONS USER[/REPOSITORY]",
-	Short:        "View and manage a set of remote repositories",
-	Long: `Add remote "git://github.com/USER/REPOSITORY.git" as with
-git-remote(1). When /REPOSITORY is omitted, the basename of the
-current working directory is used. With -p, use private remote
-"git@github.com:USER/REPOSITORY.git". If USER is "origin"
-then uses your GitHub login.
+	Usage: `
+remote add [-p] [<OPTIONS>] <USER>[/<REPOSITORY>]
+remote set-url [-p] [<OPTIONS>] <NAME> <USER>[/<REPOSITORY>]
+`,
+	Long: `Add a git remote for a GitHub repository.
+
+## Options:
+	-p
+		(Deprecated) Use the ''ssh:'' protocol instead of ''git:'' for the remote URL.
+		The writeable ''ssh:'' protocol is automatically used for own repos, GitHub
+		Enterprise remotes, and private or pushable repositories.
+
+	<USER>[/<REPOSITORY>]
+		If <USER> is "origin", that value will be substituted for your GitHub
+		username. <REPOSITORY> defaults to the name of the current working directory.
+
+## Examples:
+		$ hub remote add jingweno
+		> git remote add jingweno git://github.com/jingweno/REPO.git
+
+		$ hub remote add origin
+		> git remote add origin git@github.com:USER/REPO.git
+
+## See also:
+
+hub-fork(1), hub(1), git-remote(1)
 `,
 }
 
@@ -27,15 +47,7 @@ func init() {
 }
 
 /*
-  $ gh remote add jingweno
-  > git remote add jingweno git://github.com/jingweno/THIS_REPO.git
-
-  $ gh remote add -p jingweno
-  > git remote add jingweno git@github.com:jingweno/THIS_REPO.git
-
-  $ gh remote add origin
-  > git remote add origin git://github.com/YOUR_LOGIN/THIS_REPO.git
-*/
+ */
 func remote(command *Command, args *Args) {
 	if !args.IsParamsEmpty() && (args.FirstParam() == "add" || args.FirstParam() == "set-url") {
 		transformRemoteArgs(args)
@@ -44,57 +56,87 @@ func remote(command *Command, args *Args) {
 
 func transformRemoteArgs(args *Args) {
 	ownerWithName := args.LastParam()
-	owner, name := parseRepoNameOwner(ownerWithName)
-	if owner == "" {
+
+	re := regexp.MustCompile(fmt.Sprintf(`^%s(/%s)?$`, OwnerRe, NameRe))
+	if !re.MatchString(ownerWithName) {
 		return
+	}
+	owner := ownerWithName
+	name := ""
+	if strings.Contains(ownerWithName, "/") {
+		parts := strings.SplitN(ownerWithName, "/", 2)
+		owner, name = parts[0], parts[1]
 	}
 
 	localRepo, err := github.LocalRepo()
 	utils.Check(err)
 
-	var repoName, host string
-	if name == "" {
-		project, err := localRepo.MainProject()
-		if err == nil {
-			repoName = project.Name
-			host = project.Host
-		} else {
-			repoName, err = utils.DirName()
-			utils.Check(err)
-		}
-
-		name = repoName
+	var host string
+	mainProject, err := localRepo.MainProject()
+	if err == nil {
+		host = mainProject.Host
 	}
 
-	hostConfig, err := github.CurrentConfig().DefaultHost()
+	if name == "" {
+		if mainProject != nil {
+			name = mainProject.Name
+		} else {
+			dirName, err := git.WorkdirName()
+			utils.Check(err)
+			name = github.SanitizeProjectName(dirName)
+		}
+	}
+
+	var hostConfig *github.Host
+	if host == "" {
+		hostConfig, err = github.CurrentConfig().DefaultHost()
+	} else {
+		hostConfig, err = github.CurrentConfig().PromptForHost(host)
+	}
 	if err != nil {
 		utils.Check(github.FormatError("adding remote", err))
 	}
+	host = hostConfig.Host
 
-	words := args.Words()
-	isPrivate := parseRemotePrivateFlag(args)
-	if len(words) == 2 && words[1] == "origin" {
-		// Origin special case triggers default user/repo
-		owner = hostConfig.User
-		name = repoName
-	} else if len(words) == 2 {
-		// gh remote add jingweno foo/bar
-		if idx := args.IndexOfParam(words[1]); idx != -1 {
-			args.ReplaceParam(idx, owner)
-		}
-	} else {
-		args.RemoveParam(args.ParamsSize() - 1)
+	p := utils.NewArgsParser()
+	p.RegisterValue("-t")
+	p.RegisterValue("-m")
+	params, _ := p.Parse(args.Params)
+	if len(params) > 3 {
+		return
 	}
 
-	if strings.ToLower(owner) == strings.ToLower(hostConfig.User) {
+	for i, pi := range p.PositionalIndices {
+		if i == 1 && strings.Contains(params[i], "/") {
+			args.ReplaceParam(pi, owner)
+		} else if i == 2 {
+			args.RemoveParam(pi)
+		}
+	}
+	if len(params) == 2 && owner == "origin" {
 		owner = hostConfig.User
-		isPrivate = true
+	}
+
+	if strings.EqualFold(owner, hostConfig.User) {
+		owner = hostConfig.User
 	}
 
 	project := github.NewProject(owner, name, host)
-	// for GitHub Enterprise
-	isPrivate = isPrivate || project.Host != github.GitHubHost
-	url := project.GitURL(name, owner, isPrivate)
+
+	isPrivate := parseRemotePrivateFlag(args) || owner == hostConfig.User || project.Host != github.GitHubHost
+	if !isPrivate {
+		gh := github.NewClient(project.Host)
+		repo, err := gh.Repository(project)
+		if err != nil {
+			if strings.Contains(err.Error(), "HTTP 404") {
+				err = fmt.Errorf("Error: repository %s/%s doesn't exist", project.Owner, project.Name)
+			}
+			utils.Check(err)
+		}
+		isPrivate = repo.Private || repo.Permissions.Push
+	}
+
+	url := project.GitURL("", "", isPrivate)
 	args.AppendParams(url)
 }
 
@@ -105,23 +147,4 @@ func parseRemotePrivateFlag(args *Args) bool {
 	}
 
 	return false
-}
-
-func parseRepoNameOwner(nameWithOwner string) (owner, name string) {
-	ownerRe := fmt.Sprintf("^(%s)$", OwnerRe)
-	ownerRegexp := regexp.MustCompile(ownerRe)
-	if ownerRegexp.MatchString(nameWithOwner) {
-		owner = ownerRegexp.FindStringSubmatch(nameWithOwner)[1]
-		return
-	}
-
-	nameWithOwnerRe := fmt.Sprintf("^(%s)\\/(%s)$", OwnerRe, NameRe)
-	nameWithOwnerRegexp := regexp.MustCompile(nameWithOwnerRe)
-	if nameWithOwnerRegexp.MatchString(nameWithOwner) {
-		result := nameWithOwnerRegexp.FindStringSubmatch(nameWithOwner)
-		owner = result[1]
-		name = result[2]
-	}
-
-	return
 }

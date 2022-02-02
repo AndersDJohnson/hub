@@ -2,93 +2,135 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
-	"net/url"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdCompare = &Command{
-	Run:   compare,
-	Usage: "compare [-u] [USER] [<START>...]<END>",
-	Short: "Open a compare page on GitHub",
-	Long: `Open a GitHub compare view page in the system's default web browser.
-<START> to <END> are branch names, tag names, or commit SHA1s specifying
-the range of history to compare. If a range with two dots ("a..b") is given,
-it will be transformed into one with three dots. If <START> is omitted,
-GitHub will compare against the base branch (the default is "master").
-If <END> is omitted, GitHub compare view is opened for the current branch.
-With "-u", outputs the URL rather than opening the browser.
+	Run: compare,
+	Usage: `
+compare [-uc] [-b <BASE>]
+compare [-uc] [<OWNER>] [<BASE>...]<HEAD>
+`,
+	Long: `Open a GitHub compare page in a web browser.
+
+## Options:
+	-u, --url
+		Print the URL instead of opening it.
+
+	-c, --copy
+		Put the URL to clipboard instead of opening it.
+
+	-b, --base <BASE>
+		Base branch to compare against in case no explicit arguments were given.
+
+	[<BASE>...]<HEAD>
+		Branch names, tag names, or commit SHAs specifying the range to compare.
+		If a range with two dots (''A..B'') is given, it will be transformed into a
+		range with three dots.
+
+		The <BASE> portion defaults to the default branch of the repository.
+
+		The <HEAD> argument defaults to the current branch. If the current branch
+		is not pushed to a remote, the command will error.
+
+	<OWNER>
+		Optionally specify the owner of the repository for the compare page URL.
+
+## Examples:
+		$ hub compare
+		> open https://github.com/OWNER/REPO/compare/BRANCH
+
+		$ hub compare refactor
+		> open https://github.com/OWNER/REPO/compare/refactor
+
+		$ hub compare v1.0..v1.1
+		> open https://github.com/OWNER/REPO/compare/v1.0...v1.1
+
+		$ hub compare -u jingweno feature
+		https://github.com/jingweno/REPO/compare/feature
+
+## See also:
+
+hub-browse(1), hub(1)
 `,
 }
 
-var (
-	flagCompareURLOnly bool
-)
-
 func init() {
-	cmdCompare.Flag.BoolVarP(&flagCompareURLOnly, "url-only", "u", false, "URL only")
-
 	CmdRunner.Use(cmdCompare)
 }
 
-/*
-  $ gh compare refactor
-  > open https://github.com/CURRENT_REPO/compare/refactor
-
-  $ gh compare 1.0..1.1
-  > open https://github.com/CURRENT_REPO/compare/1.0...1.1
-
-  $ gh compare -u other-user patch
-  > open https://github.com/other-user/REPO/compare/patch
-*/
 func compare(command *Command, args *Args) {
 	localRepo, err := github.LocalRepo()
 	utils.Check(err)
 
-	var (
-		branch  *github.Branch
-		project *github.Project
-		r       string
-	)
-
-	branch, project, err = localRepo.RemoteBranchAndProject("", false)
+	mainProject, err := localRepo.MainProject()
 	utils.Check(err)
+
+	host, err := github.CurrentConfig().PromptForHost(mainProject.Host)
+	utils.Check(err)
+
+	var r string
+	flagCompareBase := args.Flag.Value("--base")
 
 	if args.IsParamsEmpty() {
-		if branch != nil && !branch.IsMaster() {
-			r = branch.ShortName()
+		currentBranch, err := localRepo.CurrentBranch()
+		if err != nil {
+			utils.Check(command.UsageError(err.Error()))
+		}
+
+		var remoteBranch *github.Branch
+		var remoteProject *github.Project
+
+		remoteBranch, remoteProject, err = findPushTarget(currentBranch)
+		if err != nil {
+			if remoteProject, err = deducePushTarget(currentBranch, host.User); err == nil {
+				remoteBranch = currentBranch
+			} else {
+				utils.Check(fmt.Errorf("the current branch '%s' doesn't seem pushed to a remote", currentBranch.ShortName()))
+			}
+		}
+
+		r = remoteBranch.ShortName()
+		if remoteProject.SameAs(mainProject) {
+			if flagCompareBase == "" && remoteBranch.IsMaster() {
+				utils.Check(fmt.Errorf("the branch to compare '%s' is the default branch", remoteBranch.ShortName()))
+			}
 		} else {
-			err = fmt.Errorf("Usage: hub compare [USER] [<START>...]<END>")
-			utils.Check(err)
+			r = fmt.Sprintf("%s:%s", remoteProject.Owner, r)
+		}
+
+		if flagCompareBase == r {
+			utils.Check(fmt.Errorf("the branch to compare '%s' is the same as --base", r))
+		} else if flagCompareBase != "" {
+			r = fmt.Sprintf("%s...%s", flagCompareBase, r)
 		}
 	} else {
-		r = parseCompareRange(args.RemoveParam(args.ParamsSize() - 1))
-		if args.IsParamsEmpty() {
-			project, err = localRepo.CurrentProject()
-			utils.Check(err)
+		if flagCompareBase != "" {
+			utils.Check(command.UsageError(""))
 		} else {
-			project = github.NewProject(args.RemoveParam(args.ParamsSize()-1), "", "")
+			r = parseCompareRange(args.RemoveParam(args.ParamsSize() - 1))
+			if !args.IsParamsEmpty() {
+				owner := args.RemoveParam(args.ParamsSize() - 1)
+				mainProject = github.NewProject(owner, mainProject.Name, mainProject.Host)
+			}
 		}
 	}
 
-	subpage := utils.ConcatPaths("compare", rangeQueryEscape(r))
-	url := project.WebURL("", "", subpage)
-	launcher, err := utils.BrowserLauncher()
-	utils.Check(err)
+	url := mainProject.WebURL("", "", "compare/"+rangeQueryEscape(r))
 
-	if flagCompareURLOnly {
-		args.Replace("echo", url)
-	} else {
-		args.Replace(launcher[0], "", launcher[1:]...)
-		args.AppendParams(url)
-	}
+	args.NoForward()
+	flagCompareURLOnly := args.Flag.Bool("--url")
+	flagCompareCopy := args.Flag.Bool("--copy")
+	printBrowseOrCopy(args, url, !flagCompareURLOnly && !flagCompareCopy, flagCompareCopy)
 }
 
 func parseCompareRange(r string) string {
-	shaOrTag := fmt.Sprintf("((?:%s:)?\\w[\\w.-]+\\w)", OwnerRe)
+	shaOrTag := fmt.Sprintf("((?:%s:)?\\w(?:[\\w/.-]*\\w)?)", OwnerRe)
 	shaOrTagRange := fmt.Sprintf("^%s\\.\\.%s$", shaOrTag, shaOrTag)
 	shaOrTagRangeRegexp := regexp.MustCompile(shaOrTagRange)
 	return shaOrTagRangeRegexp.ReplaceAllString(r, "$1...$2")
@@ -107,7 +149,6 @@ var compareUnescaper = strings.NewReplacer(
 func rangeQueryEscape(r string) string {
 	if strings.Contains(r, "..") {
 		return r
-	} else {
-		return compareUnescaper.Replace(url.QueryEscape(r))
 	}
+	return compareUnescaper.Replace(url.QueryEscape(r))
 }

@@ -2,56 +2,84 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/ui"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdFork = &Command{
 	Run:   fork,
-	Usage: "fork [--no-remote]",
-	Short: "Make a fork of a remote repository on GitHub and add as remote",
-	Long: `Forks the original project (referenced by "origin" remote) on GitHub and
-adds a new remote for it under your username.
+	Usage: "fork [--no-remote] [--remote-name <REMOTE>] [--org <ORGANIZATION>]",
+	Long: `Fork the current repository on GitHub and add a git remote for it.
+
+## Options:
+	--no-remote
+		Skip adding a git remote for the fork.
+
+	--remote-name <REMOTE>
+		Set the name for the new git remote.
+
+	--org <ORGANIZATION>
+		Fork the repository within this organization.
+
+## Examples:
+		$ hub fork
+		[ repo forked on GitHub ]
+		> git remote add -f USER git@github.com:USER/REPO.git
+
+		$ hub fork --org=ORGANIZATION
+		[ repo forked on GitHub into the ORGANIZATION organization]
+		> git remote add -f ORGANIZATION git@github.com:ORGANIZATION/REPO.git
+
+## See also:
+
+hub-clone(1), hub(1)
 `,
 }
 
-var flagForkNoRemote bool
-
 func init() {
-	cmdFork.Flag.BoolVar(&flagForkNoRemote, "no-remote", false, "")
-
 	CmdRunner.Use(cmdFork)
 }
 
-/*
-  $ gh fork
-  [ repo forked on GitHub ]
-  > git remote add -f YOUR_USER git@github.com:YOUR_USER/CURRENT_REPO.git
-
-  $ gh fork --no-remote
-  [ repo forked on GitHub ]
-*/
 func fork(cmd *Command, args *Args) {
 	localRepo, err := github.LocalRepo()
 	utils.Check(err)
 
 	project, err := localRepo.MainProject()
-	if err != nil {
-		utils.Check(fmt.Errorf("Error: repository under 'origin' remote is not a GitHub project"))
-	}
+	utils.Check(err)
 
 	config := github.CurrentConfig()
 	host, err := config.PromptForHost(project.Host)
-	if err != nil {
-		utils.Check(github.FormatError("forking repository", err))
+	utils.Check(github.FormatError("forking repository", err))
+
+	originRemote, err := localRepo.RemoteForProject(project)
+	utils.Check(err)
+
+	params := map[string]interface{}{}
+	forkOwner := host.User
+	if flagForkOrganization := args.Flag.Value("--org"); flagForkOrganization != "" {
+		forkOwner = flagForkOrganization
+		params["organization"] = forkOwner
 	}
 
-	forkProject := github.NewProject(host.User, project.Name, project.Host)
+	forkProject := github.NewProject(forkOwner, project.Name, project.Host)
+	var newRemoteName string
+	if flagForkRemoteName := args.Flag.Value("--remote-name"); flagForkRemoteName != "" {
+		newRemoteName = flagForkRemoteName
+	} else {
+		newRemoteName = forkProject.Owner
+	}
+
 	client := github.NewClient(project.Host)
 	existingRepo, err := client.Repository(forkProject)
 	if err == nil {
+		existingProject, err := github.NewProjectFromRepo(existingRepo)
+		if err == nil && !existingProject.SameAs(forkProject) {
+			existingRepo = nil
+		}
+	}
+	if err == nil && existingRepo != nil {
 		var parentURL *github.URL
 		if parent := existingRepo.Parent; parent != nil {
 			parentURL, _ = github.ParseURL(parent.HTMLURL)
@@ -63,19 +91,42 @@ func fork(cmd *Command, args *Args) {
 		}
 	} else {
 		if !args.Noop {
-			_, err := client.ForkRepository(project)
+			newRepo, err := client.ForkRepository(project, params)
 			utils.Check(err)
+			forkProject.Owner = newRepo.Owner.Login
+			forkProject.Name = newRepo.Name
 		}
 	}
 
-	if flagForkNoRemote {
-		os.Exit(0)
-	} else {
-		originRemote, _ := localRepo.OriginRemote()
+	args.NoForward()
+	if !args.Flag.Bool("--no-remote") {
+
 		originURL := originRemote.URL.String()
 		url := forkProject.GitURL("", "", true)
-		args.Replace("git", "remote", "add", "-f", forkProject.Owner, originURL)
-		args.After("git", "remote", "set-url", forkProject.Owner, url)
-		args.After("echo", fmt.Sprintf("new remote: %s", forkProject.Owner))
+
+		// Check to see if the remote already exists.
+		currentRemote, err := localRepo.RemoteByName(newRemoteName)
+		if err == nil {
+			currentProject, err := currentRemote.Project()
+			if err == nil {
+				if currentProject.SameAs(forkProject) {
+					ui.Printf("existing remote: %s\n", newRemoteName)
+					return
+				}
+				if newRemoteName == "origin" {
+					// Assume user wants to follow github guides for collaboration
+					ui.Printf("renaming existing \"origin\" remote to \"upstream\"\n")
+					args.Before("git", "remote", "rename", "origin", "upstream")
+				}
+			}
+		}
+
+		args.Before("git", "remote", "add", "-f", newRemoteName, originURL)
+		args.Before("git", "remote", "set-url", newRemoteName, url)
+
+		args.AfterFn(func() error {
+			ui.Printf("new remote: %s\n", newRemoteName)
+			return nil
+		})
 	}
 }

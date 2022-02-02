@@ -5,18 +5,32 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdInit = &Command{
 	Run:          gitInit,
 	GitExtension: true,
 	Usage:        "init -g",
-	Short:        "Create an empty git repository or reinitialize an existing one",
-	Long: `Create a git repository as with git-init(1) and add remote origin at
-"git@github.com:USER/REPOSITORY.git"; USER is your GitHub username and
-REPOSITORY is the current working directory's basename.
+	Long: `Initialize a git repository and add a remote pointing to GitHub.
+
+## Options:
+	-g
+		After initializing the repository locally, add the "origin" remote pointing
+		to "<USER>/<REPO>" repository on GitHub.
+
+		<USER> is your GitHub username, while <REPO> is the name of the current
+		working directory.
+
+## Examples:
+		$ hub init -g
+		> git init
+		> git remote add origin git@github.com:USER/REPO.git
+
+## See also:
+
+hub-create(1), hub(1), git-init(1)
 `,
 }
 
@@ -24,11 +38,6 @@ func init() {
 	CmdRunner.Use(cmdInit)
 }
 
-/*
-  $ gh init -g
-  > git init
-  > git remote add origin git@github.com:USER/REPO.git
-*/
 func gitInit(command *Command, args *Args) {
 	err := transformInitArgs(args)
 	utils.Check(err)
@@ -41,13 +50,13 @@ func transformInitArgs(args *Args) error {
 
 	var err error
 	dirToInit := "."
-	hasValueRegxp := regexp.MustCompile("^--(template|separate-git-dir|shared)$")
+	hasValueRegexp := regexp.MustCompile("^--(template|separate-git-dir|shared)$")
 
 	// Find the first argument that isn't related to any of the init flags.
 	// We assume this is the optional `directory` argument to git init.
 	for i := 0; i < args.ParamsSize(); i++ {
 		arg := args.Params[i]
-		if hasValueRegxp.MatchString(arg) {
+		if hasValueRegexp.MatchString(arg) {
 			i++
 		} else if !strings.HasPrefix(arg, "-") {
 			dirToInit = arg
@@ -60,10 +69,16 @@ func transformInitArgs(args *Args) error {
 		return err
 	}
 
+	config := github.CurrentConfig()
+	host, err := config.DefaultHost()
+	if err != nil {
+		utils.Check(github.FormatError("initializing repository", err))
+	}
+
 	// Assume that the name of the working directory is going to be the name of
 	// the project on GitHub.
 	projectName := strings.Replace(filepath.Base(dirToInit), " ", "-", -1)
-	project := github.NewProject("", projectName, "")
+	project := github.NewProject(host.User, projectName, host.Host)
 	url := project.GitURL("", "", true)
 
 	addRemote := []string{

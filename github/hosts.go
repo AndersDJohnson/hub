@@ -1,20 +1,29 @@
 package github
 
 import (
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
-	"github.com/github/hub/git"
+	"github.com/github/hub/v2/git"
 )
 
 var (
 	GitHubHostEnv = os.Getenv("GITHUB_HOST")
+	cachedHosts   []string
 )
 
-type GitHubHosts []string
+type HostError struct {
+	url *url.URL
+}
 
-func (h GitHubHosts) Include(host string) bool {
-	for _, hh := range h {
+func (e *HostError) Error() string {
+	return fmt.Sprintf("Invalid GitHub URL: %s", e.url)
+}
+
+func knownGitHubHostsInclude(host string) bool {
+	for _, hh := range knownGitHubHosts() {
 		if hh == host {
 			return true
 		}
@@ -23,20 +32,26 @@ func (h GitHubHosts) Include(host string) bool {
 	return false
 }
 
-func knownGitHubHosts() (hosts GitHubHosts) {
+func knownGitHubHosts() []string {
+	if cachedHosts != nil {
+		return cachedHosts
+	}
+
+	hosts := []string{}
 	defaultHost := DefaultGitHubHost()
 	hosts = append(hosts, defaultHost)
-	hosts = append(hosts, "ssh." + GitHubHost)
+	hosts = append(hosts, "ssh.github.com")
 
-	ghHosts, _ := git.Config("hub.host")
-	for _, ghHost := range strings.Split(ghHosts, "\n") {
+	ghHosts, _ := git.ConfigAll("hub.host")
+	for _, ghHost := range ghHosts {
 		ghHost = strings.TrimSpace(ghHost)
-		if ghHosts != "" {
+		if ghHost != "" {
 			hosts = append(hosts, ghHost)
 		}
 	}
 
-	return
+	cachedHosts = hosts
+	return hosts
 }
 
 func DefaultGitHubHost() string {

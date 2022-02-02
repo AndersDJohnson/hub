@@ -4,21 +4,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
-	"github.com/github/hub/fixtures"
+	"github.com/github/hub/v2/internal/assert"
 )
-
-func TestGitHubRepo_OriginRemote(t *testing.T) {
-	repo := fixtures.SetupTestRepo()
-	defer repo.TearDown()
-
-	localRepo, _ := LocalRepo()
-	gitRemote, _ := localRepo.OriginRemote()
-	assert.Equal(t, "origin", gitRemote.Name)
-
-	u, _ := url.Parse(repo.Remote)
-	assert.Equal(t, u, gitRemote.URL)
-}
 
 func TestGitHubRepo_remotesForPublish(t *testing.T) {
 	url, _ := url.Parse("ssh://git@github.com/Owner/repo.git")

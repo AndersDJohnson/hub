@@ -5,26 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
+	"github.com/github/hub/v2/internal/assert"
 )
-
-func TestReadMsg(t *testing.T) {
-	title, body := readMsg("")
-	assert.Equal(t, "", title)
-	assert.Equal(t, "", body)
-
-	title, body = readMsg("my pull title")
-	assert.Equal(t, "my pull title", title)
-	assert.Equal(t, "", body)
-
-	title, body = readMsg("my pull title\n\nmy description\n\nanother line")
-	assert.Equal(t, "my pull title", title)
-	assert.Equal(t, "my description\n\nanother line", body)
-
-	title, body = readMsg("my pull title\r\n\r\nmy description\r\n\r\nanother line")
-	assert.Equal(t, "my pull title", title)
-	assert.Equal(t, "my description\r\n\r\nanother line", body)
-}
 
 func TestDirIsNotEmpty(t *testing.T) {
 	dir := createTempDir(t)

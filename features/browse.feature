@@ -5,11 +5,11 @@ Feature: hub browse
   Scenario: No repo
     When I run `hub browse`
     Then the exit status should be 1
-    Then the output should contain exactly "git browse [-u] [[<USER>/]<REPOSITORY>|--] [SUBPAGE]\n"
+    Then the output should contain exactly "Usage: hub browse [-uc] [[<USER>/]<REPOSITORY>|--] [<SUBPAGE>]\n"
 
   Scenario: Project with owner
     When I successfully run `hub browse mislav/dotfiles`
-    Then there should be no output
+    Then the output should not contain anything
     And "open https://github.com/mislav/dotfiles" should be run
 
   Scenario: Project without owner
@@ -47,7 +47,7 @@ Feature: hub browse
   Scenario: Current project
     Given I am in "git://github.com/mislav/dotfiles.git" git repo
     When I successfully run `hub browse`
-    Then there should be no output
+    Then the output should not contain anything
     And "open https://github.com/mislav/dotfiles" should be run
 
   Scenario: Commit in current project
@@ -61,6 +61,22 @@ Feature: hub browse
     And I am on the "feature" branch with upstream "origin/experimental"
     When I successfully run `hub browse`
     Then "open https://github.com/mislav/dotfiles/tree/experimental" should be run
+
+  Scenario: Current branch pushed to fork
+    Given I am in "git://github.com/blueyed/dotfiles.git" git repo
+    And the "mislav" remote has url "git@github.com:mislav/dotfiles.git"
+    And I am on the "feature" branch with upstream "mislav/experimental"
+    And git "push.default" is set to "upstream"
+    When I successfully run `hub browse`
+    Then "open https://github.com/mislav/dotfiles/tree/experimental" should be run
+
+  Scenario: Current branch pushed to fork with simple tracking
+    Given I am in "git://github.com/blueyed/dotfiles.git" git repo
+    And the "mislav" remote has url "git@github.com:mislav/dotfiles.git"
+    And I am on the "feature" branch with upstream "mislav/feature"
+    And git "push.default" is set to "simple"
+    When I successfully run `hub browse`
+    Then "open https://github.com/mislav/dotfiles/tree/feature" should be run
 
   Scenario: Default branch
     Given I am in "git://github.com/mislav/dotfiles.git" git repo
@@ -79,7 +95,7 @@ Feature: hub browse
     Given I am in "git://github.com/jashkenas/coffee-script.git" git repo
     And the "mislav" remote has url "git@github.com:mislav/coffee-script.git"
     And the default branch for "origin" is "master"
-    And I am on the "master" branch pushed to "mislav/master"
+    And the "master" branch is pushed to "mislav/master"
     When I successfully run `hub browse`
     Then "open https://github.com/jashkenas/coffee-script" should be run
 
@@ -109,7 +125,7 @@ Feature: hub browse
     And the "mislav" remote has url "git@github.com:mislav/coffee-script.git"
     And I am on the "feature" branch pushed to "mislav/feature"
     When I successfully run `hub browse -- issues`
-    Then there should be no output
+    Then the output should not contain anything
     Then "open https://github.com/jashkenas/coffee-script/issues" should be run
 
   Scenario: Forward Slash Delimited branch
@@ -163,6 +179,14 @@ Feature: hub browse
     Given I am in "git://git.my.org/mislav/dotfiles.git" git repo
     And I am "mislav" on git.my.org with OAuth token "FITOKEN"
     And "git.my.org" is a whitelisted Enterprise host
+    When I successfully run `hub browse`
+    Then "open https://git.my.org/mislav/dotfiles" should be run
+
+  Scenario: Multiple Enterprise repos
+    Given I am in "git://git.my.org/mislav/dotfiles.git" git repo
+    And I am "mislav" on git.my.org with OAuth token "FITOKEN"
+    And "git.my.org" is a whitelisted Enterprise host
+    And "git.another.org" is a whitelisted Enterprise host
     When I successfully run `hub browse`
     Then "open https://git.my.org/mislav/dotfiles" should be run
 

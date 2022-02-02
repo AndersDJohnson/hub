@@ -16,7 +16,7 @@ Feature: hub am
       }
       """
     When I successfully run `hub am -q -3 https://github.com/mislav/dotfiles/pull/387`
-    Then there should be no output
+    Then the output should not contain anything
     Then the latest commit message should be "Create a README"
 
   Scenario: Apply commits when TMPDIR is empty
@@ -54,6 +54,17 @@ Feature: hub am
       }
       """
     When I successfully run `hub am -q https://github.com/davidbalbert/dotfiles/commit/fdb9921`
+    Then the latest commit message should be "Create a README"
+
+  Scenario: Apply patch from commit in a pull request
+    Given the GitHub API server:
+      """
+      get('/repos/davidbalbert/dotfiles/commits/fdb9921') {
+        halt 400 unless request.env['HTTP_ACCEPT'] == 'application/vnd.github.v3.patch;charset=utf-8'
+        generate_patch "Create a README"
+      }
+      """
+    When I successfully run `hub am -q https://github.com/davidbalbert/dotfiles/pull/123/commits/fdb9921`
     Then the latest commit message should be "Create a README"
 
   Scenario: Apply patch from gist

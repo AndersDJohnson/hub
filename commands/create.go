@@ -2,58 +2,64 @@ package commands
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
-	"github.com/github/hub/git"
-	"github.com/github/hub/github"
-	"github.com/github/hub/ui"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/git"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/ui"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdCreate = &Command{
 	Run:   create,
-	Usage: "create [-p] [-d DESCRIPTION] [-h HOMEPAGE] [NAME]",
-	Short: "Create this repository on GitHub and add GitHub as origin",
-	Long: `Create a new public GitHub repository from the current git
-repository and add remote origin at "git@github.com:USER/REPOSITORY.git";
-USER is your GitHub username and REPOSITORY is the current working
-directory name. To explicitly name the new repository, pass in NAME,
-optionally in ORGANIZATION/NAME form to create under an organization
-you're a member of. With -p, create a private repository, and with
--d and -h set the repository's description and homepage URL, respectively.
+	Usage: "create [-poc] [-d <DESCRIPTION>] [-h <HOMEPAGE>] [[<ORGANIZATION>/]<NAME>]",
+	Long: `Create a new repository on GitHub and add a git remote for it.
+
+## Options:
+	-p, --private
+		Create a private repository.
+
+	-d, --description <DESCRIPTION>
+		A short description of the GitHub repository.
+
+	-h, --homepage <HOMEPAGE>
+		A URL with more information about the repository. Use this, for example, if
+		your project has an external website.
+
+	--remote-name <REMOTE>
+		Set the name for the new git remote (default: "origin").
+
+	-o, --browse
+		Open the new repository in a web browser.
+
+	-c, --copy
+		Put the URL of the new repository to clipboard instead of printing it.
+
+	[<ORGANIZATION>/]<NAME>
+		The name for the repository on GitHub (default: name of the current working
+		directory).
+
+		Optionally, create the repository within <ORGANIZATION>.
+
+## Examples:
+		$ hub create
+		[ repo created on GitHub ]
+		> git remote add -f origin git@github.com:USER/REPO.git
+
+		$ hub create sinatra/recipes
+		[ repo created in GitHub organization ]
+		> git remote add -f origin git@github.com:sinatra/recipes.git
+
+## See also:
+
+hub-init(1), hub(1)
 `,
 }
 
-var (
-	flagCreatePrivate                         bool
-	flagCreateDescription, flagCreateHomepage string
-)
-
 func init() {
-	cmdCreate.Flag.BoolVarP(&flagCreatePrivate, "private", "p", false, "PRIVATE")
-	cmdCreate.Flag.StringVarP(&flagCreateDescription, "description", "d", "", "DESCRIPTION")
-	cmdCreate.Flag.StringVarP(&flagCreateHomepage, "homepage", "h", "", "HOMEPAGE")
-
 	CmdRunner.Use(cmdCreate)
 }
 
-/*
-  $ gh create
-  ... create repo on github ...
-  > git remote add -f origin git@github.com:YOUR_USER/CURRENT_REPO.git
-
-  # with description:
-  $ gh create -d 'It shall be mine, all mine!'
-
-  $ gh create recipes
-  [ repo created on GitHub ]
-  > git remote add origin git@github.com:YOUR_USER/recipes.git
-
-  $ gh create sinatra/recipes
-  [ repo created in GitHub organization ]
-  > git remote add origin git@github.com:sinatra/recipes.git
-*/
 func create(command *Command, args *Args) {
 	_, err := git.Dir()
 	if err != nil {
@@ -63,15 +69,14 @@ func create(command *Command, args *Args) {
 
 	var newRepoName string
 	if args.IsParamsEmpty() {
-		newRepoName, err = utils.DirName()
+		dirName, err := git.WorkdirName()
 		utils.Check(err)
+		newRepoName = github.SanitizeProjectName(dirName)
 	} else {
-		reg := regexp.MustCompile("^[^-]")
-		if !reg.MatchString(args.FirstParam()) {
-			err = fmt.Errorf("invalid argument: %s", args.FirstParam())
-			utils.Check(err)
-		}
 		newRepoName = args.FirstParam()
+		if newRepoName == "" {
+			utils.Check(command.UsageError(""))
+		}
 	}
 
 	config := github.CurrentConfig()
@@ -90,13 +95,30 @@ func create(command *Command, args *Args) {
 	project := github.NewProject(owner, newRepoName, host.Host)
 	gh := github.NewClient(project.Host)
 
-	var action string
-	if gh.IsRepositoryExist(project) {
-		ui.Printf("%s already exists on %s\n", project, project.Host)
-		action = "set remote origin"
+	flagCreatePrivate := args.Flag.Bool("--private")
+
+	repo, err := gh.Repository(project)
+	if err == nil {
+		foundProject := github.NewProject(repo.FullName, "", project.Host)
+		if foundProject.SameAs(project) {
+			if !repo.Private && flagCreatePrivate {
+				err = fmt.Errorf("Repository '%s' already exists and is public", repo.FullName)
+				utils.Check(err)
+			} else {
+				ui.Errorln("Existing repository detected")
+				project = foundProject
+			}
+		} else {
+			repo = nil
+		}
 	} else {
-		action = "created repository"
+		repo = nil
+	}
+
+	if repo == nil {
 		if !args.Noop {
+			flagCreateDescription := args.Flag.Value("--description")
+			flagCreateHomepage := args.Flag.Value("--homepage")
 			repo, err := gh.CreateRepository(project, flagCreateDescription, flagCreateHomepage, flagCreatePrivate)
 			utils.Check(err)
 			project = github.NewProject(repo.FullName, "", project.Host)
@@ -106,13 +128,24 @@ func create(command *Command, args *Args) {
 	localRepo, err := github.LocalRepo()
 	utils.Check(err)
 
-	remote, _ := localRepo.OriginRemote()
-	if remote == nil || remote.Name != "origin" {
-		url := project.GitURL("", "", true)
-		args.Replace("git", "remote", "add", "-f", "origin", url)
-	} else {
-		args.Replace("git", "remote", "-v")
+	originName := args.Flag.Value("--remote-name")
+	if originName == "" {
+		originName = "origin"
 	}
 
-	args.After("echo", fmt.Sprintf("%s:", action), project.String())
+	if originRemote, err := localRepo.RemoteByName(originName); err == nil {
+		originProject, err := originRemote.Project()
+		if err != nil || !originProject.SameAs(project) {
+			ui.Errorf("A git remote named '%s' already exists and is set to push to '%s'.\n", originRemote.Name, originRemote.PushURL)
+		}
+	} else {
+		url := project.GitURL("", "", true)
+		args.Before("git", "remote", "add", "-f", originName, url)
+	}
+
+	webURL := project.WebURL("", "", "")
+	args.NoForward()
+	flagCreateBrowse := args.Flag.Bool("--browse")
+	flagCreateCopy := args.Flag.Bool("--copy")
+	printBrowseOrCopy(args, webURL, flagCreateBrowse, flagCreateCopy)
 }

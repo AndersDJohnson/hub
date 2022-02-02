@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
+	"github.com/github/hub/v2/internal/assert"
 )
 
 func TestSSHConfigReader_Read(t *testing.T) {
@@ -23,4 +23,18 @@ func TestSSHConfigReader_Read(t *testing.T) {
 	r := &SSHConfigReader{[]string{f.Name()}}
 	sc := r.Read()
 	assert.Equal(t, "ssh.github.com", sc["github.com"])
+}
+
+func TestSSHConfigReader_ExpandTokens(t *testing.T) {
+	f, _ := ioutil.TempFile("", "ssh-config")
+	c := `Host github.com example.org
+  Hostname 1-%h-2-%%h-3-%h-%%
+	`
+
+	ioutil.WriteFile(f.Name(), []byte(c), os.ModePerm)
+
+	r := &SSHConfigReader{[]string{f.Name()}}
+	sc := r.Read()
+	assert.Equal(t, "1-github.com-2-%h-3-github.com-%", sc["github.com"])
+	assert.Equal(t, "1-example.org-2-%h-3-example.org-%", sc["example.org"])
 }

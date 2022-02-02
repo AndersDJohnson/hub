@@ -4,26 +4,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
-	"github.com/github/hub/ui"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/ui"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdAlias = &Command{
 	Run:   alias,
-	Usage: "alias [-s] [SHELL]",
-	Short: "Show shell instructions for wrapping git",
-	Long: `Shows shell instructions for wrapping git. If given, SHELL specifies the
-type of shell; otherwise defaults to the value of SHELL environment
-variable. With -s, outputs shell script suitable for eval.
+	Usage: "alias [-s] [<SHELL>]",
+	Long: `Show shell instructions for wrapping git.
+
+## Options
+	-s
+		Output shell script suitable for ''eval''.
+
+	<SHELL>
+		Specify the type of shell (default: "$SHELL" environment variable).
+
+## See also:
+
+hub(1)
 `,
 }
 
-var flagAliasScript bool
-
 func init() {
-	cmdAlias.Flag.BoolVarP(&flagAliasScript, "script", "s", false, "SCRIPT")
 	CmdRunner.Use(cmdAlias)
 }
 
@@ -35,11 +41,16 @@ func alias(command *Command, args *Args) {
 		shell = os.Getenv("SHELL")
 	}
 
+	flagAliasScript := args.Flag.Bool("-s")
 	if shell == "" {
-		utils.Check(fmt.Errorf("Unknown shell"))
+		cmd := "hub alias <shell>"
+		if flagAliasScript {
+			cmd = "hub alias -s <shell>"
+		}
+		utils.Check(fmt.Errorf("Error: couldn't detect shell type. Please specify your shell with `%s`", cmd))
 	}
 
-	shells := []string{"bash", "zsh", "sh", "ksh", "csh", "tcsh", "fish"}
+	shells := []string{"bash", "zsh", "sh", "ksh", "csh", "tcsh", "fish", "rc"}
 	shell = filepath.Base(shell)
 	var validShell bool
 	for _, s := range shells {
@@ -59,6 +70,8 @@ func alias(command *Command, args *Args) {
 		switch shell {
 		case "csh", "tcsh":
 			alias = "alias git hub"
+		case "rc":
+			alias = "fn git { builtin hub $* }"
 		default:
 			alias = "alias git=hub"
 		}
@@ -74,11 +87,13 @@ func alias(command *Command, args *Args) {
 		case "ksh":
 			profile = "~/.profile"
 		case "fish":
-			profile = "~/.config/fish/config.fish"
+			profile = "~/.config/fish/functions/git.fish"
 		case "csh":
 			profile = "~/.cshrc"
 		case "tcsh":
 			profile = "~/.tcshrc"
+		case "rc":
+			profile = "$home/lib/profile"
 		default:
 			profile = "your profile"
 		}
@@ -89,14 +104,24 @@ func alias(command *Command, args *Args) {
 		var eval string
 		switch shell {
 		case "fish":
-			eval = `eval (hub alias -s)`
+			eval = `function git --wraps hub --description 'Alias for hub, which wraps git to provide extra functionality with GitHub.'
+	hub $argv
+end`
+		case "rc":
+			eval = "eval `{hub alias -s}"
 		case "csh", "tcsh":
 			eval = "eval \"`hub alias -s`\""
 		default:
 			eval = `eval "$(hub alias -s)"`
 		}
+
+		indent := regexp.MustCompile(`(?m)^\t+`)
+		eval = indent.ReplaceAllStringFunc(eval, func(match string) string {
+			return strings.Repeat(" ", len(match)*4)
+		})
+
 		ui.Println(eval)
 	}
 
-	os.Exit(0)
+	args.NoForward()
 }

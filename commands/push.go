@@ -3,32 +3,35 @@ package commands
 import (
 	"strings"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdPush = &Command{
 	Run:          push,
 	GitExtension: true,
-	Usage:        "push REMOTE-1,REMOTE-2,...,REMOTE-N [REF]",
-	Short:        "Upload data, tags and branches to a remote repository",
-	Long: `Push REF to each of REMOTE-1 through REMOTE-N by executing
-multiple git-push(1) commands.`,
+	Usage:        "push <REMOTE>[,<REMOTE2>...] [<REF>]",
+	Long: `Push a git branch to each of the listed remotes.
+
+## Examples:
+		$ hub push origin,staging,qa bert_timeout
+		> git push origin bert_timeout
+		> git push staging bert_timeout
+		> git push qa bert_timeout
+
+		$ hub push origin
+		> git push origin HEAD
+
+## See also:
+
+hub(1), git-push(1)
+`,
 }
 
 func init() {
 	CmdRunner.Use(cmdPush)
 }
 
-/*
-  $ gh push origin,staging,qa bert_timeout
-  > git push origin bert_timeout
-  > git push staging bert_timeout
-  > git push qa bert_timeout
-
-  $ gh push origin
-  > git push origin HEAD
-*/
 func push(command *Command, args *Args) {
 	if !args.IsParamsEmpty() && strings.Contains(args.FirstParam(), ",") {
 		transformPushArgs(args)

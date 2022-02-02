@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/github/hub/git"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/git"
+	"github.com/github/hub/v2/utils"
 )
 
 type Project struct {
@@ -22,7 +23,9 @@ func (p Project) String() string {
 }
 
 func (p *Project) SameAs(other *Project) bool {
-	return p.Owner == other.Owner && p.Name == other.Name && p.Host == other.Host
+	return strings.EqualFold(p.Owner, other.Owner) &&
+		strings.EqualFold(p.Name, other.Name) &&
+		strings.EqualFold(p.Host, other.Host)
 }
 
 func (p *Project) WebURL(name, owner, path string) string {
@@ -87,9 +90,8 @@ func rawHost(host string) string {
 
 	if u.IsAbs() {
 		return u.Host
-	} else {
-		return u.Path
 	}
+	return u.Path
 }
 
 func preferredProtocol() string {
@@ -100,9 +102,19 @@ func preferredProtocol() string {
 	return userProtocol
 }
 
+func NewProjectFromRepo(repo *Repository) (p *Project, err error) {
+	url, err := url.Parse(repo.HTMLURL)
+	if err != nil {
+		return
+	}
+
+	p, err = NewProjectFromURL(url)
+	return
+}
+
 func NewProjectFromURL(url *url.URL) (p *Project, err error) {
-	if !knownGitHubHosts().Include(url.Host) {
-		err = fmt.Errorf("Invalid GitHub URL: %s", url)
+	if !knownGitHubHostsInclude(url.Host) {
+		err = &HostError{url}
 		return
 	}
 
@@ -141,7 +153,7 @@ func newProject(owner, name, host, protocol string) *Project {
 		host = DefaultGitHubHost()
 	}
 	if host == "ssh.github.com" {
-		host = "github.com"
+		host = GitHubHost
 	}
 
 	if protocol != "http" && protocol != "https" {
@@ -164,14 +176,15 @@ func newProject(owner, name, host, protocol string) *Project {
 		}
 	}
 
-	if name == "" {
-		name, _ = utils.DirName()
-	}
-
 	return &Project{
 		Name:     name,
 		Owner:    owner,
 		Host:     host,
 		Protocol: protocol,
 	}
+}
+
+func SanitizeProjectName(name string) string {
+	name = filepath.Base(name)
+	return strings.Replace(name, " ", "-", -1)
 }

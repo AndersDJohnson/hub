@@ -6,75 +6,76 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/github/hub/cmd"
+	"github.com/github/hub/v2/cmd"
 )
 
-var pwd, home string
-
-func init() {
-	// caching `pwd` and $HOME and reset them after test repo is teared down
-	// `pwd` is changed to the bin temp dir during test run
-	pwd, _ = os.Getwd()
-	home = os.Getenv("HOME")
-}
-
 type TestRepo struct {
-	pwd    string
-	dir    string
-	home   string
-	Remote string
+	Remote   string
+	TearDown func()
 }
 
-func (r *TestRepo) Setup() {
-	dir, err := ioutil.TempDir("", "test-repo")
-	if err != nil {
+func (r *TestRepo) AddRemote(name, url, pushURL string) {
+	add := cmd.New("git").WithArgs("remote", "add", name, url)
+	if _, err := add.CombinedOutput(); err != nil {
 		panic(err)
 	}
-	r.dir = dir
-
-	os.Setenv("HOME", r.dir)
-
-	targetPath := filepath.Join(r.dir, "test.git")
-	err = r.clone(r.Remote, targetPath)
-	if err != nil {
-		panic(err)
-	}
-
-	err = os.Chdir(targetPath)
-	if err != nil {
-		panic(err)
+	if pushURL != "" {
+		set := cmd.New("git").WithArgs("remote", "set-url", "--push", name, pushURL)
+		if _, err := set.CombinedOutput(); err != nil {
+			panic(err)
+		}
 	}
 }
 
-func (r *TestRepo) clone(repo, dir string) error {
-	cmd := cmd.New("git").WithArgs("clone", repo, dir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		err = fmt.Errorf("error cloning %s to %s: %s", repo, dir, output)
-	}
-
-	return err
-}
-
-func (r *TestRepo) TearDown() {
-	err := os.Chdir(r.pwd)
+func (r *TestRepo) AddFile(filePath string, content string) {
+	path := filepath.Join(os.Getenv("HOME"), filePath)
+	err := os.MkdirAll(filepath.Dir(path), 0771)
 	if err != nil {
 		panic(err)
 	}
 
-	os.Setenv("HOME", r.home)
-
-	err = os.RemoveAll(r.dir)
-	if err != nil {
-		panic(err)
-	}
-
+	ioutil.WriteFile(path, []byte(content), os.ModePerm)
 }
 
 func SetupTestRepo() *TestRepo {
-	remotePath := filepath.Join(pwd, "..", "fixtures", "test.git")
-	repo := &TestRepo{pwd: pwd, home: home, Remote: remotePath}
-	repo.Setup()
+	pwd, _ := os.Getwd()
+	oldEnv := make(map[string]string)
+	overrideEnv := func(name, value string) {
+		oldEnv[name] = os.Getenv(name)
+		os.Setenv(name, value)
+	}
 
-	return repo
+	remotePath := filepath.Join(pwd, "..", "fixtures", "test.git")
+	home, err := ioutil.TempDir("", "test-repo")
+	if err != nil {
+		panic(err)
+	}
+
+	overrideEnv("HOME", home)
+	overrideEnv("XDG_CONFIG_HOME", "")
+	overrideEnv("XDG_CONFIG_DIRS", "")
+
+	targetPath := filepath.Join(home, "test.git")
+	cmd := cmd.New("git").WithArgs("clone", remotePath, targetPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		panic(fmt.Errorf("error running %s\n%s\n%s", cmd, err, output))
+	}
+
+	if err = os.Chdir(targetPath); err != nil {
+		panic(err)
+	}
+
+	tearDown := func() {
+		if err := os.Chdir(pwd); err != nil {
+			panic(err)
+		}
+		for name, value := range oldEnv {
+			os.Setenv(name, value)
+		}
+		if err = os.RemoveAll(home); err != nil {
+			panic(err)
+		}
+	}
+
+	return &TestRepo{Remote: remotePath, TearDown: tearDown}
 }

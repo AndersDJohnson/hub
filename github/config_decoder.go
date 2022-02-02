@@ -1,11 +1,12 @@
 package github
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/BurntSushi/toml"
-	"github.com/github/hub/Godeps/_workspace/src/gopkg.in/yaml.v1"
+	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v2"
 )
 
 type configDecoder interface {
@@ -29,20 +30,44 @@ func (y *yamlConfigDecoder) Decode(r io.Reader, c *Config) error {
 		return err
 	}
 
-	yc := make(yamlConfig)
+	yc := yaml.MapSlice{}
 	err = yaml.Unmarshal(d, &yc)
 
 	if err != nil {
 		return err
 	}
 
-	for h, v := range yc {
-		vv := v[0]
-		host := Host{
-			Host:        h,
-			User:        vv.User,
-			AccessToken: vv.OAuthToken,
-			Protocol:    vv.Protocol,
+	for _, hostEntry := range yc {
+		v, ok := hostEntry.Value.([]interface{})
+		if !ok {
+			return fmt.Errorf("value of host entry is must be array but got %#v", hostEntry.Value)
+		}
+		if len(v) < 1 {
+			continue
+		}
+		hostName, ok := hostEntry.Key.(string)
+		if !ok {
+			return fmt.Errorf("host name is must be string but got %#v", hostEntry.Key)
+		}
+		host := &Host{Host: hostName}
+		for _, prop := range v[0].(yaml.MapSlice) {
+			propName, ok := prop.Key.(string)
+			if !ok {
+				return fmt.Errorf("property name is must be string but got %#v", prop.Key)
+			}
+			switch propName {
+			case "user":
+				host.User, ok = prop.Value.(string)
+			case "oauth_token":
+				host.AccessToken, ok = prop.Value.(string)
+			case "protocol":
+				host.Protocol, ok = prop.Value.(string)
+			case "unix_socket":
+				host.UnixSocket, ok = prop.Value.(string)
+			}
+			if !ok {
+				return fmt.Errorf("%s is must be string but got %#v", propName, prop.Value)
+			}
 		}
 		c.Hosts = append(c.Hosts, host)
 	}

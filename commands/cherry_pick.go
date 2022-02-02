@@ -1,21 +1,25 @@
 package commands
 
 import (
+	"fmt"
 	"regexp"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdCherryPick = &Command{
 	Run:          cherryPick,
 	GitExtension: true,
-	Usage:        "cherry-pick GITHUB-REF",
-	Short:        "Apply the changes introduced by some existing commits",
-	Long: `Cherry-pick a commit from a fork using either full URL to the commit
-or GitHub-flavored Markdown notation, which is user@sha. If the remote
-doesn't yet exist, it will be added. A git-fetch(1) user is issued
-prior to the cherry-pick attempt.
+	Usage: `
+cherry-pick <COMMIT-URL>
+cherry-pick <USER>@<SHA>
+`,
+	Long: `Cherry-pick a commit from a fork on GitHub.
+
+## See also:
+
+hub-am(1), hub(1), git-cherry-pick(1)
 `,
 }
 
@@ -23,19 +27,6 @@ func init() {
 	CmdRunner.Use(cmdCherryPick)
 }
 
-/*
-  $ gh cherry-pick https://github.com/jingweno/gh/commit/a319d88#comments
-  > git remote add -f --no-tags jingweno git://github.com/jingweno/gh.git
-  > git cherry-pick a319d88
-
-  $ gh cherry-pick jingweno@a319d88
-  > git remote add -f --no-tags jingweno git://github.com/jingweno/gh.git
-  > git cherry-pick a319d88
-
-  $ gh cherry-pick jingweno@SHA
-  > git fetch jingweno
-  > git cherry-pick SHA
-*/
 func cherryPick(command *Command, args *Args) {
 	if args.IndexOfParam("-m") == -1 && args.IndexOfParam("--mainline") == -1 {
 		transformCherryPickArgs(args)
@@ -47,44 +38,61 @@ func transformCherryPickArgs(args *Args) {
 		return
 	}
 
+	var project *github.Project
+	var sha, refspec string
+	shaRe := "[a-f0-9]{7,40}"
+
+	var mainProject *github.Project
+	localRepo, mainProjectErr := github.LocalRepo()
+	if mainProjectErr == nil {
+		mainProject, mainProjectErr = localRepo.MainProject()
+	}
+
 	ref := args.LastParam()
-	project, sha := parseCherryPickProjectAndSha(ref)
+	if url, err := github.ParseURL(ref); err == nil {
+		projectPath := url.ProjectPath()
+		commitRegex := regexp.MustCompile(fmt.Sprintf("^commit/(%s)", shaRe))
+		pullRegex := regexp.MustCompile(fmt.Sprintf(`^pull/(\d+)/commits/(%s)`, shaRe))
+		if matches := commitRegex.FindStringSubmatch(projectPath); len(matches) > 0 {
+			sha = matches[1]
+			project = url.Project
+		} else if matches := pullRegex.FindStringSubmatch(projectPath); len(matches) > 0 {
+			pullID := matches[1]
+			sha = matches[2]
+			utils.Check(mainProjectErr)
+			project = mainProject
+			refspec = fmt.Sprintf("refs/pull/%s/head", pullID)
+		}
+	} else {
+		ownerWithShaRegexp := regexp.MustCompile(fmt.Sprintf("^(%s)@(%s)$", OwnerRe, shaRe))
+		if matches := ownerWithShaRegexp.FindStringSubmatch(ref); len(matches) > 0 {
+			utils.Check(mainProjectErr)
+			project = mainProject
+			project.Owner = matches[1]
+			sha = matches[2]
+		}
+	}
+
 	if project != nil {
 		args.ReplaceParam(args.IndexOfParam(ref), sha)
 
-		remote := gitRemoteForProject(project)
-		if remote != nil {
-			args.Before("git", "fetch", remote.Name)
+		tmpName := "_hub-cherry-pick"
+		remoteName := tmpName
+
+		if remote, err := localRepo.RemoteForProject(project); err == nil {
+			remoteName = remote.Name
 		} else {
-			args.Before("git", "remote", "add", "-f", "--no-tags", project.Owner, project.GitURL("", "", false))
+			args.Before("git", "remote", "add", remoteName, project.GitURL("", "", false))
+		}
+
+		fetchArgs := []string{"git", "fetch", "-q", "--no-tags", remoteName}
+		if refspec != "" {
+			fetchArgs = append(fetchArgs, refspec)
+		}
+		args.Before(fetchArgs...)
+
+		if remoteName == tmpName {
+			args.Before("git", "remote", "rm", remoteName)
 		}
 	}
-}
-
-func parseCherryPickProjectAndSha(ref string) (project *github.Project, sha string) {
-	url, err := github.ParseURL(ref)
-	if err == nil {
-		commitRegex := regexp.MustCompile("^commit\\/([a-f0-9]{7,40})")
-		projectPath := url.ProjectPath()
-		if commitRegex.MatchString(projectPath) {
-			sha = commitRegex.FindStringSubmatch(projectPath)[1]
-			project = url.Project
-
-			return
-		}
-	}
-
-	ownerWithShaRegexp := regexp.MustCompile("^([a-zA-Z0-9][a-zA-Z0-9-]*)@([a-f0-9]{7,40})$")
-	if ownerWithShaRegexp.MatchString(ref) {
-		matches := ownerWithShaRegexp.FindStringSubmatch(ref)
-		sha = matches[2]
-		localRepo, err := github.LocalRepo()
-		utils.Check(err)
-
-		project, err = localRepo.CurrentProject()
-		utils.Check(err)
-		project.Owner = matches[1]
-	}
-
-	return
 }

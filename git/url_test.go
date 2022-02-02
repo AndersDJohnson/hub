@@ -3,7 +3,7 @@ package git
 import (
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
+	"github.com/github/hub/v2/internal/assert"
 )
 
 func createURLParser() *URLParser {

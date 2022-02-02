@@ -5,49 +5,51 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/utils"
 )
 
 var cmdBrowse = &Command{
 	Run:   browse,
-	Usage: "browse [-u] [[<USER>/]<REPOSITORY>|--] [SUBPAGE]",
-	Short: "Open a GitHub page in the default browser",
-	Long: `Open repository's GitHub page in the system's default web browser using
-"open(1)" or the "BROWSER" env variable. If the repository isn't
-specified, "browse" opens the page of the repository found in the current
-directory. If SUBPAGE is specified, the browser will open on the specified
-subpage: one of "wiki", "commits", "issues" or other (the default is
-"tree"). With "-u", outputs the URL rather than opening the browser.
+	Usage: "browse [-uc] [[<USER>/]<REPOSITORY>|--] [<SUBPAGE>]",
+	Long: `Open a GitHub repository in a web browser.
+
+## Options:
+	-u, --url
+		Print the URL instead of opening it.
+
+	-c, --copy
+		Put the URL in clipboard instead of opening it.
+
+	[<USER>/]<REPOSITORY>
+		Defaults to repository in the current working directory.
+
+	<SUBPAGE>
+		One of "wiki", "commits", "issues", or other (default: "tree").
+
+## Examples:
+		$ hub browse
+		> open https://github.com/REPO
+
+		$ hub browse -- issues
+		> open https://github.com/REPO/issues
+
+		$ hub browse jingweno/gh
+		> open https://github.com/jingweno/gh
+
+		$ hub browse gh wiki
+		> open https://github.com/USER/gh/wiki
+
+## See also:
+
+hub-compare(1), hub(1)
 `,
 }
 
-var (
-	flagBrowseURLOnly bool
-)
-
 func init() {
-	cmdBrowse.Flag.BoolVarP(&flagBrowseURLOnly, "url-only", "u", false, "URL")
-
 	CmdRunner.Use(cmdBrowse)
 }
 
-/*
-  $ gh browse
-  > open https://github.com/CURRENT_REPO
-
-  $ gh browse -- issues
-  > open https://github.com/CURRENT_REPO/issues
-
-  $ gh browse jingweno/gh
-  > open https://github.com/jingweno/gh
-
-  $ gh browse gh
-  > open https://github.com/YOUR_LOGIN/gh
-
-  $ gh browse gh wiki
-  > open https://github.com/YOUR_LOGIN/gh/wiki
-*/
 func browse(command *Command, args *Args) {
 	var (
 		dest    string
@@ -85,15 +87,25 @@ func browse(command *Command, args *Args) {
 			currentBranch = localRepo.MasterBranch()
 		}
 
-		branch, project, _ = localRepo.RemoteBranchAndProject("", currentBranch.IsMaster())
+		var owner string
+		mainProject, err := localRepo.MainProject()
+		if err == nil {
+			host, err := github.CurrentConfig().PromptForHost(mainProject.Host)
+			if err != nil {
+				utils.Check(github.FormatError("in browse", err))
+			} else {
+				owner = host.User
+			}
+		}
+
+		branch, project, _ = localRepo.RemoteBranchAndProject(owner, currentBranch.IsMaster())
 		if branch == nil {
 			branch = localRepo.MasterBranch()
 		}
 	}
 
 	if project == nil {
-		err := fmt.Errorf(command.FormattedUsage())
-		utils.Check(err)
+		utils.Check(command.UsageError(""))
 	}
 
 	if subpage == "commits" {
@@ -106,16 +118,12 @@ func browse(command *Command, args *Args) {
 		path = subpage
 	}
 
-	pageUrl := project.WebURL("", "", path)
-	launcher, err := utils.BrowserLauncher()
-	utils.Check(err)
+	pageURL := project.WebURL("", "", path)
 
-	if flagBrowseURLOnly {
-		args.Replace("echo", pageUrl)
-	} else {
-		args.Replace(launcher[0], "", launcher[1:]...)
-		args.AppendParams(pageUrl)
-	}
+	args.NoForward()
+	flagBrowseURLPrint := args.Flag.Bool("--url")
+	flagBrowseURLCopy := args.Flag.Bool("--copy")
+	printBrowseOrCopy(args, pageURL, !flagBrowseURLPrint && !flagBrowseURLCopy, flagBrowseURLCopy)
 }
 
 func branchInURL(branch *github.Branch) string {

@@ -18,12 +18,12 @@ Feature: bash tab-completion
   Scenario: Offers pull-request flags
     When I type "git pull-request -" and press <Tab>
     When I press <Tab> again
-    Then the completion menu should offer "-F -b -f -h -i -m" unsorted
+    Then the completion menu should offer "-F -b -f -h -i -m -a -M -l" unsorted
 
   Scenario: Doesn't offer already used pull-request flags
     When I type "git pull-request -F myfile -h mybranch -" and press <Tab>
     When I press <Tab> again
-    Then the completion menu should offer "-b -f -i -m" unsorted
+    Then the completion menu should offer "-b -f -i -m -a -M -l" unsorted
 
   Scenario: Browse to issues
     When I type "git browse -- i" and press <Tab>
@@ -35,7 +35,8 @@ Feature: bash tab-completion
 
   Scenario: Completion of fork argument
     When I type "git fork -" and press <Tab>
-    Then the command should expand to "git fork --no-remote"
+    When I press <Tab> again
+    Then the completion menu should offer "--no-remote --remote-name --org" unsorted
 
   Scenario: Completion of user/repo in "browse"
   Scenario: Completion of branch names in "compare"

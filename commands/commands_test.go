@@ -3,10 +3,11 @@ package commands
 import (
 	"io/ioutil"
 	"os"
+	"regexp"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
-	"github.com/github/hub/ui"
+	"github.com/github/hub/v2/internal/assert"
+	"github.com/github/hub/v2/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -73,53 +74,14 @@ func TestArgsForSubCommand(t *testing.T) {
 }
 
 func TestFlagsAfterArguments(t *testing.T) {
-	c := &Command{Usage: "foo -m MESSAGE ARG1"}
-
-	var flag string
-	c.Flag.StringVarP(&flag, "message", "m", "", "MESSAGE")
+	c := &Command{Long: "-m, --message MSG"}
 
 	args := NewArgs([]string{"foo", "bar", "-m", "baz"})
-
-	c.parseArguments(args)
-	assert.Equal(t, "baz", flag)
-
+	err := c.parseArguments(args)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, "baz", args.Flag.Value("--message"))
 	assert.Equal(t, 1, len(args.Params))
 	assert.Equal(t, "bar", args.LastParam())
-}
-
-func TestCommandUsageSubCommands(t *testing.T) {
-	f1 := func(c *Command, args *Args) {}
-	f2 := func(c *Command, args *Args) {}
-
-	c := &Command{Usage: "foo", Run: f1}
-	s := &Command{Key: "bar", Usage: "foo bar", Run: f2}
-	c.Use(s)
-
-	usage := c.subCommandsUsage()
-
-	expected := `usage: git foo
-   or: git foo bar
-`
-	assert.Equal(t, expected, usage)
-}
-
-func TestCommandUsageSubCommandsPrintOnlyRunnables(t *testing.T) {
-	f1 := func(c *Command, args *Args) {}
-
-	c := &Command{Usage: "foo"}
-	s := &Command{Key: "bar", Usage: "foo bar", Run: f1}
-	c.Use(s)
-
-	usage := c.subCommandsUsage()
-
-	expected := `usage: git foo bar
-`
-	assert.Equal(t, expected, usage)
-}
-
-func TestCommandNameTakeUsage(t *testing.T) {
-	c := &Command{Usage: "foo -t -v --foo"}
-	assert.Equal(t, "foo", c.Name())
 }
 
 func TestCommandNameTakeKey(t *testing.T) {
@@ -163,21 +125,22 @@ func TestSubCommandCall(t *testing.T) {
 	assert.Equal(t, "baz", result)
 }
 
-func TestSubCommandsUsage(t *testing.T) {
-	// with subcommand
-	f1 := func(c *Command, args *Args) {}
-	f2 := func(c *Command, args *Args) {}
+func Test_NameWithOwnerRe(t *testing.T) {
+	re := regexp.MustCompile(NameWithOwnerRe)
 
-	c := &Command{Usage: "foo", Run: f1}
-	s := &Command{Key: "bar", Usage: "foo bar", Run: f2}
-	c.Use(s)
+	assert.Equal(t, true, re.MatchString("o/n"))
+	assert.Equal(t, true, re.MatchString("own-er/my-project.git"))
+	assert.Equal(t, true, re.MatchString("my-project.git"))
+	assert.Equal(t, true, re.MatchString("my_project"))
+	assert.Equal(t, true, re.MatchString("-dash"))
+	assert.Equal(t, true, re.MatchString(".dotfiles"))
 
-	usage := c.subCommandsUsage()
-	assert.Equal(t, "usage: git foo\n   or: git foo bar\n", usage)
-
-	// no subcommand
-	cc := &Command{Usage: "foo", Run: f1}
-
-	usage = cc.subCommandsUsage()
-	assert.Equal(t, "usage: git foo\n", usage)
+	assert.Equal(t, false, re.MatchString(""))
+	assert.Equal(t, false, re.MatchString("/"))
+	assert.Equal(t, false, re.MatchString(" "))
+	assert.Equal(t, false, re.MatchString("owner/na me"))
+	assert.Equal(t, false, re.MatchString("owner/na/me"))
+	assert.Equal(t, false, re.MatchString("own.er/name"))
+	assert.Equal(t, false, re.MatchString("own_er/name"))
+	assert.Equal(t, false, re.MatchString("-owner/name"))
 }

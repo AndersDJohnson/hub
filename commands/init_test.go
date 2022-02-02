@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
-	"github.com/github/hub/github"
+	"github.com/github/hub/v2/github"
+	"github.com/github/hub/v2/internal/assert"
 )
 
 func setupInitContext() {
 	os.Setenv("HUB_PROTOCOL", "git")
+	os.Setenv("HUB_CONFIG", "")
 	github.CreateTestConfigs("jingweno", "123")
 }
 
@@ -56,13 +57,13 @@ func TestInitInAnotherDir(t *testing.T) {
 
 	commands := args.Commands()
 	assert.Equal(t, 2, len(commands))
-	assert.Equal(t, "git init --template mytpl --shared=umask my project", commands[0].String())
+	assert.Equal(t, "git init --template mytpl --shared=umask \"my project\"", commands[0].String())
 
 	currentDir, err := os.Getwd()
 	assert.Equal(t, nil, err)
 
 	expected := fmt.Sprintf(
-		"git --git-dir %s remote add origin git@github.com:jingweno/%s.git",
+		"git --git-dir \"%s\" remote add origin git@github.com:jingweno/%s.git",
 		filepath.Join(currentDir, "my project", ".git"),
 		"my-project",
 	)

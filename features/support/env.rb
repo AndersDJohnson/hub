@@ -3,113 +3,90 @@ require 'fileutils'
 require 'forwardable'
 require 'tmpdir'
 
-# Ruby 2.2.0 compat
-Cucumber::Ast::Step.class_eval do
-  undef_method :text_length
-  def text_length(name=name())
-    self.class::INDENT + self.class::INDENT +
-      keyword.unpack('U*').length +
-      name.unpack('U*').length
-  end
+system_git = `which git 2>/dev/null`.chomp
+bin_dir = File.expand_path('../fakebin', __FILE__)
+
+tmpdir = Dir.mktmpdir('hub_test')
+tmp_bin_dir = "#{tmpdir}/bin"
+Aruba.configure do |aruba|
+  aruba.send(:find_option, :root_directory).value = tmpdir
 end
 
-system_git = `which git 2>/dev/null`.chomp
-lib_dir = File.expand_path('../../../lib', __FILE__)
-bin_dir = File.expand_path('../fakebin', __FILE__)
 hub_dir = Dir.mktmpdir('hub_build')
 raise 'hub build failed' unless system("./script/build -o #{hub_dir}/hub")
 
 Before do
-  # don't want hub to run in bundle
-  unset_bundler_env_vars
-  # have bin/hub load code from the current project
-  set_env 'RUBYLIB', lib_dir
-  # speed up load time by skipping RubyGems
-  set_env 'RUBYOPT', '--disable-gems' if RUBY_VERSION > '1.9'
-  # put fakebin on the PATH
-  set_env 'PATH', "#{hub_dir}:#{bin_dir}:#{ENV['PATH']}"
-  # clear out GIT if it happens to be set
-  set_env 'GIT', nil
-  # exclude this project's git directory from use in testing
-  set_env 'GIT_CEILING_DIRECTORIES', File.dirname(lib_dir)
-  # sabotage git commands that might try to access a remote host
-  set_env 'GIT_PROXY_COMMAND', 'echo'
-  # avoids reading from current user's "~/.gitconfig"
-  set_env 'HOME', File.expand_path(File.join(current_dir, 'home'))
-  # used in fakebin/git
-  set_env 'HUB_SYSTEM_GIT', system_git
-  # ensure that api.github.com is actually never hit in tests
-  set_env 'HUB_TEST_HOST', '127.0.0.1:0'
-  # ensure we use fakebin `open` to test browsing
-  set_env 'BROWSER', 'open'
-  # sabotage opening a commit message editor interactively
-  set_env 'GIT_EDITOR', 'false'
-  # reset current localization settings
-  set_env 'LANG', nil
-
   author_name  = "Hub"
   author_email = "hub@test.local"
-  set_env 'GIT_AUTHOR_NAME',     author_name
-  set_env 'GIT_COMMITTER_NAME',  author_name
-  set_env 'GIT_AUTHOR_EMAIL',    author_email
-  set_env 'GIT_COMMITTER_EMAIL', author_email
 
-  set_env 'HUB_VERSION', 'dev'
-  set_env 'HUB_REPORT_CRASH', 'never'
+  aruba.environment.update(
+    # speed up load time by skipping RubyGems
+    'RUBYOPT' => '--disable-gems',
+    # put fakebin on the PATH
+    'PATH' => "#{hub_dir}:#{tmp_bin_dir}:#{bin_dir}:#{ENV['PATH']}",
+    # clear out GIT if it happens to be set
+    'GIT' => nil,
+    # exclude this project's git directory from use in testing
+    'GIT_CEILING_DIRECTORIES' => File.expand_path('../../..', __FILE__),
+    # sabotage git commands that might try to access a remote host
+    'GIT_PROXY_COMMAND' => 'echo',
+    # avoids reading from current user's "~/.gitconfig"
+    'HOME' => expand_path('home'),
+    'TMPDIR' => tmpdir,
+    # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html#variables
+    'XDG_CONFIG_HOME' => nil,
+    'XDG_CONFIG_DIRS' => nil,
+    # used in fakebin/git
+    'HUB_SYSTEM_GIT' => system_git,
+    # ensure that api.github.com is actually never hit in tests
+    'HUB_TEST_HOST' => 'http://127.0.0.1:0',
+    # ensure we use fakebin `open` to test browsing
+    'BROWSER' => 'open',
+    # sabotage opening a commit message editor interactively
+    'GIT_EDITOR' => 'false',
+    # reset current localization settings
+    'LANG' => nil,
+    'LANGUAGE' => nil,
+    'LC_ALL' => 'C.UTF-8',
+    # ignore current user's token
+    'GITHUB_TOKEN' => nil,
+    'GITHUB_USER' => nil,
+    'GITHUB_PASSWORD' => nil,
+    'GITHUB_HOST' => nil,
+    'GITHUB_REPOSITORY' => nil,
 
-  FileUtils.mkdir_p ENV['HOME']
+    'GIT_AUTHOR_NAME' =>     author_name,
+    'GIT_COMMITTER_NAME' =>  author_name,
+    'GIT_AUTHOR_EMAIL' =>    author_email,
+    'GIT_COMMITTER_EMAIL' => author_email,
 
-  # increase process exit timeout from the default of 3 seconds
-  @aruba_timeout_seconds = 5
+    'HUB_VERSION' => 'dev',
+    'HUB_REPORT_CRASH' => 'never',
+    'HUB_PROTOCOL' => nil,
+  )
 
-  if defined?(RUBY_ENGINE) and RUBY_ENGINE == 'jruby'
-    @aruba_io_wait_seconds = 0.1
-  else
-    @aruba_io_wait_seconds = 0.02
-  end
+  FileUtils.mkdir_p(expand_path('~'))
 end
 
 After do
   @server.stop if defined? @server and @server
-  FileUtils.rm_f("#{bin_dir}/vim")
+  FileUtils.rm_f("#{tmp_bin_dir}/vim")
 end
 
-RSpec::Matchers.define :be_successful_command do
+After('@cache_clear') do
+  FileUtils.rm_rf("#{tmpdir}/hub/api")
+end
+
+RSpec::Matchers.define :be_successfully_executed do
   match do |cmd|
-    cmd.success?
+    expect(cmd).to have_exit_status(0)
   end
 
   failure_message do |cmd|
-    %(command "#{cmd}" exited with status #{cmd.status}:) <<
-      cmd.output.gsub(/^/, ' ' * 2)
-  end
-end
-
-class SimpleCommand
-  attr_reader :output
-  extend Forwardable
-
-  def_delegator :@status, :exitstatus, :status
-  def_delegators :@status, :success?
-
-  def initialize cmd
-    @cmd = cmd
-  end
-
-  def to_s
-    @cmd
-  end
-
-  def self.run cmd
-    command = new(cmd)
-    command.run
-    command
-  end
-
-  def run
-    @output = `#{@cmd} 2>&1`.chomp
-    @status = $?
-    $?.success?
+    msg = %(command `#{cmd.commandline}` exited with status #{cmd.exit_status})
+    stderr = cmd.stderr
+    msg << ":\n" << stderr.gsub(/^/, '  ') unless stderr.empty?
+    msg
   end
 end
 
@@ -123,7 +100,7 @@ World Module.new {
   end
 
   def history
-    histfile = File.join(ENV['HOME'], '.history')
+    histfile = expand_path('~/.history')
     if File.exist? histfile
       File.readlines histfile
     else
@@ -137,7 +114,7 @@ World Module.new {
   end
 
   def edit_hub_config
-    config = File.join(ENV['HOME'], '.config/hub')
+    config = expand_path('~/.config/hub')
     FileUtils.mkdir_p File.dirname(config)
     if File.exist? config
       data = YAML.load File.read(config)
@@ -149,29 +126,20 @@ World Module.new {
   end
 
   define_method(:text_editor_script) do |bash_code|
-    File.open("#{bin_dir}/vim", 'w', 0755) { |exe|
+    FileUtils.mkdir_p(tmp_bin_dir)
+    File.open("#{tmp_bin_dir}/vim", 'w', 0755) { |exe|
       exe.puts "#!/bin/bash"
       exe.puts "set -e"
       exe.puts bash_code
     }
   end
 
-  def run_silent cmd
-    in_current_dir do
-      command = SimpleCommand.run(cmd)
-      expect(command).to be_successful_command
-      command.output
-    end
-  end
-
   def empty_commit(message = nil)
-    message ||= 'empty'
-    run_silent "git commit --quiet -m '#{message}' --allow-empty"
-  end
-
-  # Aruba unnecessarily creates new Announcer instance on each invocation
-  def announcer
-    @announcer ||= super
+    unless message
+      @empty_commit_count = defined?(@empty_commit_count) ? @empty_commit_count + 1 : 1
+      message = "empty #{@empty_commit_count}"
+    end
+    run_command_and_stop "git commit --quiet -m '#{message}' --allow-empty"
   end
 
   def shell_escape(message)

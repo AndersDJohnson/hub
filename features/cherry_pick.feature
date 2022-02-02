@@ -9,19 +9,24 @@ Feature: hub cherry-pick
 
   Scenario: From GitHub commit URL
     When I run `hub cherry-pick https://github.com/rtomayko/ronn/commit/a319d88#comments`
-    Then "git fetch origin" should be run
+    Then "git fetch -q --no-tags origin" should be run
+    And "git cherry-pick a319d88" should be run
+
+  Scenario: From GitHub pull request URL
+    When I run `hub cherry-pick https://github.com/blueyed/ronn/pull/560/commits/a319d88`
+    And "git fetch -q --no-tags origin refs/pull/560/head" should be run
     And "git cherry-pick a319d88" should be run
 
   Scenario: From fork that has existing remote
     Given the "mislav" remote has url "git@github.com:mislav/ronn.git"
     When I run `hub cherry-pick https://github.com/mislav/ronn/commit/a319d88`
-    Then "git fetch mislav" should be run
+    Then "git fetch -q --no-tags mislav" should be run
     And "git cherry-pick a319d88" should be run
 
   Scenario: Using GitHub owner@SHA notation
     Given the "mislav" remote has url "git@github.com:mislav/ronn.git"
     When I run `hub cherry-pick mislav@a319d88`
-    Then "git fetch mislav" should be run
+    Then "git fetch -q --no-tags mislav" should be run
     And "git cherry-pick a319d88" should be run
 
   Scenario: Using GitHub owner@SHA notation that is too short
@@ -40,10 +45,14 @@ Feature: hub cherry-pick
 
   Scenario: Using GitHub owner@SHA notation with remote add
     When I run `hub cherry-pick mislav@a319d88`
-    Then "git remote add -f --no-tags mislav git://github.com/mislav/ronn.git" should be run
+    Then "git remote add _hub-cherry-pick git://github.com/mislav/ronn.git" should be run
+    And "git fetch -q --no-tags _hub-cherry-pick" should be run
+    And "git remote rm _hub-cherry-pick" should be run
     And "git cherry-pick a319d88" should be run
 
   Scenario: From fork that doesn't have a remote
     When I run `hub cherry-pick https://github.com/jingweno/ronn/commit/a319d88`
-    Then "git remote add -f --no-tags jingweno git://github.com/jingweno/ronn.git" should be run
+    Then "git remote add _hub-cherry-pick git://github.com/jingweno/ronn.git" should be run
+    And "git fetch -q --no-tags _hub-cherry-pick" should be run
+    And "git remote rm _hub-cherry-pick" should be run
     And "git cherry-pick a319d88" should be run

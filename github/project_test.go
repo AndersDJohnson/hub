@@ -5,9 +5,56 @@ import (
 	"os"
 	"testing"
 
-	"github.com/github/hub/Godeps/_workspace/src/github.com/bmizerany/assert"
-	"github.com/github/hub/fixtures"
+	"github.com/github/hub/v2/fixtures"
+	"github.com/github/hub/v2/internal/assert"
 )
+
+func TestSameAs(t *testing.T) {
+	tests := []struct {
+		name     string
+		project1 *Project
+		project2 *Project
+		want     bool
+	}{
+		{
+			name: "same project",
+			project1: &Project{
+				Owner: "fOo",
+				Name:  "baR",
+				Host:  "gItHUb.com",
+			},
+			project2: &Project{
+				Owner: "FoO",
+				Name:  "BAr",
+				Host:  "GithUB.com",
+			},
+			want: true,
+		},
+		{
+			name: "different project",
+			project1: &Project{
+				Owner: "foo",
+				Name:  "bar",
+				Host:  "github.com",
+			},
+			project2: &Project{
+				Owner: "foo",
+				Name:  "baz",
+				Host:  "github.com",
+			},
+			want: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.project1.SameAs(test.project2)
+			want := test.want
+
+			assert.Equal(t, want, got)
+		})
+	}
+}
 
 func TestProject_WebURL(t *testing.T) {
 	project := Project{
@@ -89,6 +136,15 @@ func TestProject_NewProjectFromURL(t *testing.T) {
 
 	u, _ := url.Parse("ssh://git@github.com/octokit/go-octokit.git")
 	p, err := NewProjectFromURL(u)
+
+	assert.Equal(t, nil, err)
+	assert.Equal(t, "go-octokit", p.Name)
+	assert.Equal(t, "octokit", p.Owner)
+	assert.Equal(t, "github.com", p.Host)
+	assert.Equal(t, "http", p.Protocol)
+
+	u, _ = url.Parse("ssh://ssh.github.com/octokit/go-octokit.git")
+	p, err = NewProjectFromURL(u)
 
 	assert.Equal(t, nil, err)
 	assert.Equal(t, "go-octokit", p.Name)

@@ -4,18 +4,23 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/github/hub/cmd"
+	"github.com/github/hub/v2/cmd"
+	"github.com/github/hub/v2/utils"
 )
 
 type Args struct {
 	Executable  string
 	GlobalFlags []string
 	Command     string
+	ProgramPath string
 	Params      []string
 	beforeChain []*cmd.Cmd
 	afterChain  []*cmd.Cmd
 	Noop        bool
 	Terminator  bool
+	noForward   bool
+	Callbacks   []func() error
+	Flag        *utils.ArgsParser
 }
 
 func (a *Args) Words() []string {
@@ -37,35 +42,60 @@ func (a *Args) After(command ...string) {
 	a.afterChain = append(a.afterChain, cmd.NewWithArray(command))
 }
 
+func (a *Args) AfterFn(fn func() error) {
+	a.Callbacks = append(a.Callbacks, fn)
+}
+
+func (a *Args) NoForward() {
+	a.noForward = true
+}
+
 func (a *Args) Replace(executable, command string, params ...string) {
 	a.Executable = executable
 	a.Command = command
 	a.Params = params
+	a.GlobalFlags = []string{}
+	a.noForward = false
 }
 
 func (a *Args) Commands() []*cmd.Cmd {
-	result := a.beforeChain
-	result = append(result, a.ToCmd())
-	result = append(result, a.afterChain...)
+	result := []*cmd.Cmd{}
+	appendFromChain := func(c *cmd.Cmd) {
+		if c.Name == "git" {
+			ga := []string{c.Name}
+			ga = append(ga, a.GlobalFlags...)
+			ga = append(ga, c.Args...)
+			result = append(result, cmd.NewWithArray(ga))
+		} else {
+			result = append(result, c)
+		}
+	}
+
+	for _, c := range a.beforeChain {
+		appendFromChain(c)
+	}
+	if !a.noForward {
+		result = append(result, a.ToCmd())
+	}
+	for _, c := range a.afterChain {
+		appendFromChain(c)
+	}
 
 	return result
 }
 
 func (a *Args) ToCmd() *cmd.Cmd {
-	c := cmd.New(a.Executable)
-	args := make([]string, 0)
+	c := cmd.NewWithArray(append([]string{a.Executable}, a.GlobalFlags...))
 
 	if a.Command != "" {
-		args = append(args, a.Command)
+		c.WithArg(a.Command)
 	}
 
 	for _, arg := range a.Params {
-		if arg != "" {
-			args = append(args, arg)
-		}
+		c.WithArg(arg)
 	}
 
-	return c.WithArgs(args...)
+	return c
 }
 
 func (a *Args) GetParam(i int) string {
@@ -74,7 +104,7 @@ func (a *Args) GetParam(i int) string {
 
 func (a *Args) FirstParam() string {
 	if a.ParamsSize() == 0 {
-		panic(fmt.Sprintf("Index 0 is out of bound"))
+		panic("Index 0 is out of bound")
 	}
 
 	return a.Params[0]
@@ -110,9 +140,8 @@ func (a *Args) InsertParam(i int, items ...string) {
 }
 
 func (a *Args) RemoveParam(i int) string {
-	newParams, item := removeItem(a.Params, i)
-	a.Params = newParams
-
+	item := a.Params[i]
+	a.Params = append(a.Params[:i], a.Params[i+1:]...)
 	return item
 }
 
@@ -150,30 +179,26 @@ func (a *Args) AppendParams(params ...string) {
 	a.Params = append(a.Params, params...)
 }
 
-func (a *Args) HasFlags(flags ...string) bool {
-	for _, f := range flags {
-		if i := a.IndexOfParam(f); i != -1 {
-			return true
+func NewArgs(args []string) *Args {
+	var (
+		command string
+		params  []string
+		noop    bool
+	)
+
+	cmdIdx := findCommandIndex(args)
+	globalFlags := args[:cmdIdx]
+	if cmdIdx > 0 {
+		args = args[cmdIdx:]
+		for i := len(globalFlags) - 1; i >= 0; i-- {
+			if globalFlags[i] == noopFlag {
+				noop = true
+				globalFlags = append(globalFlags[:i], globalFlags[i+1:]...)
+			}
 		}
 	}
 
-	return false
-}
-
-func NewArgs(args []string) *Args {
-	var (
-		command     string
-		params      []string
-		noop        bool
-		globalFlags []string
-	)
-
-	slurpGlobalFlags(&args, &globalFlags)
-	noop = removeValue(&globalFlags, noopFlag)
-
-	if len(args) == 0 {
-		params = []string{}
-	} else {
+	if len(args) != 0 {
 		command = args[0]
 		params = args[1:]
 	}
@@ -192,6 +217,7 @@ func NewArgs(args []string) *Args {
 const (
 	noopFlag    = "--noop"
 	versionFlag = "--version"
+	listCmds    = "--list-cmds="
 	helpFlag    = "--help"
 	configFlag  = "-c"
 	chdirFlag   = "-C"
@@ -202,15 +228,15 @@ func looksLikeFlag(value string) bool {
 	return strings.HasPrefix(value, flagPrefix)
 }
 
-func slurpGlobalFlags(args *[]string, globalFlags *[]string) {
+func findCommandIndex(args []string) int {
 	slurpNextValue := false
 	commandIndex := 0
 
-	for i, arg := range *args {
+	for i, arg := range args {
 		if slurpNextValue {
 			commandIndex = i + 1
 			slurpNextValue = false
-		} else if arg == versionFlag || arg == helpFlag || !looksLikeFlag(arg) {
+		} else if arg == versionFlag || arg == helpFlag || strings.HasPrefix(arg, listCmds) || !looksLikeFlag(arg) {
 			break
 		} else {
 			commandIndex = i + 1
@@ -219,33 +245,5 @@ func slurpGlobalFlags(args *[]string, globalFlags *[]string) {
 			}
 		}
 	}
-
-	if commandIndex > 0 {
-		aa := *args
-		*globalFlags = aa[0:commandIndex]
-		*args = aa[commandIndex:]
-	}
-}
-
-func removeItem(slice []string, index int) (newSlice []string, item string) {
-	if index < 0 || index > len(slice)-1 {
-		panic(fmt.Sprintf("Index %d is out of bound", index))
-	}
-
-	item = slice[index]
-	newSlice = append(slice[:index], slice[index+1:]...)
-
-	return newSlice, item
-}
-
-func removeValue(slice *[]string, value string) (found bool) {
-	aa := *slice
-	for i := len(aa) - 1; i >= 0; i-- {
-		arg := aa[i]
-		if arg == value {
-			found = true
-			*slice, _ = removeItem(*slice, i)
-		}
-	}
-	return found
+	return commandIndex
 }

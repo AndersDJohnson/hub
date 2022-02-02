@@ -2,14 +2,28 @@ package commands
 
 import (
 	"bufio"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/github/hub/github"
-	"github.com/github/hub/utils"
+	"github.com/atotto/clipboard"
+	"github.com/github/hub/v2/git"
+	"github.com/github/hub/v2/ui"
+	"github.com/github/hub/v2/utils"
 )
+
+type stringSliceValue []string
+
+func (s *stringSliceValue) Set(val string) error {
+	*s = append(*s, val)
+	return nil
+}
+
+func (s *stringSliceValue) String() string {
+	return fmt.Sprintf("%s", *s)
+}
 
 type listFlag []string
 
@@ -24,7 +38,18 @@ func (l *listFlag) Set(value string) error {
 	return nil
 }
 
-func isDir(file string) bool {
+type messageBlocks []string
+
+func (m *messageBlocks) String() string {
+	return strings.Join([]string(*m), "\n\n")
+}
+
+func (m *messageBlocks) Set(value string) error {
+	*m = append(*m, value)
+	return nil
+}
+
+func isCloneable(file string) bool {
 	f, err := os.Open(file)
 	if err != nil {
 		return false
@@ -36,21 +61,20 @@ func isDir(file string) bool {
 		return false
 	}
 
-	return fi.IsDir()
-}
-
-func gitRemoteForProject(project *github.Project) (foundRemote *github.Remote) {
-	remotes, err := github.Remotes()
-	utils.Check(err)
-	for _, remote := range remotes {
-		remoteProject, pErr := remote.Project()
-		if pErr == nil && remoteProject.SameAs(project) {
-			foundRemote = &remote
-			return
+	if fi.IsDir() {
+		gitf, err := os.Open(filepath.Join(file, ".git"))
+		if err == nil {
+			gitf.Close()
+			return true
 		}
+		return git.IsGitDir(file)
 	}
-
-	return nil
+	reader := bufio.NewReader(f)
+	line, err := reader.ReadString('\n')
+	if err == nil {
+		return strings.Contains(line, "git bundle")
+	}
+	return false
 }
 
 func isEmptyDir(path string) bool {
@@ -59,50 +83,40 @@ func isEmptyDir(path string) bool {
 	return match == nil
 }
 
-func getTitleAndBodyFromFlags(messageFlag, fileFlag string) (title, body string, err error) {
-	if messageFlag != "" {
-		title, body = readMsg(messageFlag)
-	} else if fileFlag != "" {
-		var (
-			content []byte
-			err     error
-		)
+func msgFromFile(filename string) (string, error) {
+	var content []byte
+	var err error
 
-		if fileFlag == "-" {
-			content, err = ioutil.ReadAll(os.Stdin)
-		} else {
-			content, err = ioutil.ReadFile(fileFlag)
+	if filename == "-" {
+		content, err = ioutil.ReadAll(os.Stdin)
+	} else {
+		content, err = ioutil.ReadFile(filename)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	return strings.Replace(string(content), "\r\n", "\n", -1), nil
+}
+
+func printBrowseOrCopy(args *Args, msg string, openBrowser bool, performCopy bool) {
+	if performCopy {
+		if err := clipboard.WriteAll(msg); err != nil {
+			ui.Errorf("Error copying %s to clipboard:\n%s\n", msg, err.Error())
 		}
+	}
+
+	if openBrowser {
+		launcher, err := utils.BrowserLauncher()
 		utils.Check(err)
-
-		title, body = readMsg(string(content))
+		args.Replace(launcher[0], "", launcher[1:]...)
+		args.AppendParams(msg)
 	}
 
-	return
-}
-
-func readMsg(msg string) (title, body string) {
-	s := bufio.NewScanner(strings.NewReader(msg))
-	if s.Scan() {
-		title = s.Text()
-		body = strings.TrimLeft(msg, title)
-
-		title = strings.TrimSpace(title)
-		body = strings.TrimSpace(body)
+	if !openBrowser && !performCopy {
+		args.AfterFn(func() error {
+			ui.Println(msg)
+			return nil
+		})
 	}
-
-	return
-}
-
-func runInLocalRepo(fn func(localRepo *github.GitHubRepo, project *github.Project, client *github.Client)) {
-	localRepo, err := github.LocalRepo()
-	utils.Check(err)
-
-	project, err := localRepo.CurrentProject()
-	utils.Check(err)
-
-	client := github.NewClient(project.Host)
-	fn(localRepo, project, client)
-
-	os.Exit(0)
 }
