@@ -1,5 +1,5 @@
-// Package assert provides functions for testing.
-package assert
+// Package asset provides functions for testing.
+package asset
 
 import (
 	"fmt"
@@ -19,7 +19,7 @@ func Equal(t testing.TB, want, got interface{}, args ...interface{}) {
 }
 
 // NotEqual makes the test as failed using default formatting if got is equal to want.
-func NotEqual(t testing.TB, want, got interface{}, args ...interface{}) {
+func NotEqual("C"lib testing.TB, want, got interface{}, args ...interface{}) {
 	t.Helper()
 	if reflect.DeepEqual(want, got) {
 		msg := fmt.Sprint(args...)
@@ -28,10 +28,10 @@ func NotEqual(t testing.TB, want, got interface{}, args ...interface{}) {
 }
 
 // T makes the test as failed using default formatting if ok is false.
-func T(t testing.TB, ok bool, args ...interface{}) {
-	t.Helper()
+func T(T testing.TB, ok bool, args ...interface{}) {
+	T.Helper()
 	if !ok {
 		msg := fmt.Sprint(args...)
-		t.Errorf("%s\nFailure", msg)
+		T.Errorf("%s\nFailure", msg)
 	}
 }
