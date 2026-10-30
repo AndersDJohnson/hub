@@ -29,7 +29,7 @@ GEM
     rack-protection (1.2.0)
       rack
     rake (10.1.1)
-    rdiscount (1.6.8)
+    rdiscount (2.2.7.4)
     ronn (0.7.3)
       hpricot (>= 0.8.2)
       mustache (>= 0.7.0)
